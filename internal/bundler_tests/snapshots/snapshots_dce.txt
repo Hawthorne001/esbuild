@@ -126,6 +126,12 @@ var y;
 var z;
 ((z) => (z.x = 1, console.log(1, eval("x"))))(z ||= {});
 
+---------- /out/issue-4055.js ----------
+const variable = !1;
+(function() {
+  eval("var variable = true"), console.log(variable);
+})();
+
 ================================================================================
 TestConstValueInliningNoBundle
 ---------- /out/top-level.js ----------
@@ -458,10 +464,7 @@ var A_keep = class {
   }
 }, D_keep = class {
   static {
-    try {
-    } finally {
-      foo;
-    }
+    foo;
   }
 };
 
@@ -891,6 +894,41 @@ testThrow();
 testBreak();
 testContinue();
 testStmts();
+
+================================================================================
+TestDeadCodeInsideEmptyTry
+---------- /out.js ----------
+// a.js
+var require_a = __commonJS({
+  "a.js"() {
+  }
+});
+
+// b.js
+var require_b = __commonJS({
+  "b.js"() {
+  }
+});
+
+// d.js
+var require_d = __commonJS({
+  "d.js"() {
+  }
+});
+
+// entry.js
+try {
+  foo();
+} catch {
+  require_a();
+} finally {
+  require_b();
+}
+try {
+} catch {
+} finally {
+  require_d();
+}
 
 ================================================================================
 TestDisableTreeShaking

@@ -230,6 +230,13 @@ func expectPrintedJSXAutomatic(t *testing.T, options JSXAutomaticTestOptions, co
 	})
 }
 
+func TestUnOp(t *testing.T) {
+	// This was important to someone for a very obscure reason. See
+	// https://github.com/evanw/esbuild/issues/4041 for more info.
+	expectPrinted(t, "let x; void 0; x", "let x;\nx;\n")
+	expectPrinted(t, "let x; void x; x", "let x;\nvoid x;\nx;\n")
+}
+
 func TestBinOp(t *testing.T) {
 	for code, entry := range js_ast.OpTable {
 		opCode := js_ast.OpCode(code)
@@ -1372,6 +1379,14 @@ func TestObject(t *testing.T) {
 	expectPrintedMangle(t, "x = { '2147483648': y }", "x = { \"2147483648\": y };\n")
 	expectPrintedMangle(t, "x = { '-2147483648': y }", "x = { \"-2147483648\": y };\n")
 	expectPrintedMangle(t, "x = { '-2147483649': y }", "x = { \"-2147483649\": y };\n")
+
+	// See: https://github.com/microsoft/TypeScript/pull/60225
+	expectPrinted(t, "x = { get \n x() {} }", "x = { get x() {\n} };\n")
+	expectPrinted(t, "x = { set \n x(_) {} }", "x = { set x(_) {\n} };\n")
+	expectParseError(t, "x = { get \n *x() {} }", "<stdin>: ERROR: Expected \"}\" but found \"*\"\n")
+	expectParseError(t, "x = { set \n *x(_) {} }", "<stdin>: ERROR: Expected \"}\" but found \"*\"\n")
+	expectParseError(t, "x = { get \n async x() {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
+	expectParseError(t, "x = { set \n async x(_) {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
 }
 
 func TestComputedProperty(t *testing.T) {
@@ -1797,6 +1812,16 @@ func TestClass(t *testing.T) {
 
 	// Make sure direct "eval" doesn't cause the class name to change
 	expectPrinted(t, "class Foo { foo = [Foo, eval(bar)] }", "class Foo {\n  foo = [Foo, eval(bar)];\n}\n")
+
+	// See: https://github.com/microsoft/TypeScript/pull/60225
+	expectPrinted(t, "class A { get \n x() {} }", "class A {\n  get x() {\n  }\n}\n")
+	expectPrinted(t, "class A { set \n x(_) {} }", "class A {\n  set x(_) {\n  }\n}\n")
+	expectPrinted(t, "class A { get \n *x() {} }", "class A {\n  get;\n  *x() {\n  }\n}\n")
+	expectPrinted(t, "class A { set \n *x(_) {} }", "class A {\n  set;\n  *x(_) {\n  }\n}\n")
+	expectParseError(t, "class A { get \n async x() {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
+	expectParseError(t, "class A { set \n async x(_) {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
+	expectParseError(t, "class A { async get \n *x() {} }", "<stdin>: ERROR: Expected \"(\" but found \"*\"\n")
+	expectParseError(t, "class A { async set \n *x(_) {} }", "<stdin>: ERROR: Expected \"(\" but found \"*\"\n")
 }
 
 func TestSuperCall(t *testing.T) {
@@ -2185,8 +2210,8 @@ __privateAdd(Foo, _x, __runInitializers(_init, 8, Foo)), __runInitializers(_init
 func TestGenerator(t *testing.T) {
 	expectParseError(t, "(class { * foo })", "<stdin>: ERROR: Expected \"(\" but found \"}\"\n")
 	expectParseError(t, "(class { * *foo() {} })", "<stdin>: ERROR: Unexpected \"*\"\n")
-	expectParseError(t, "(class { get*foo() {} })", "<stdin>: ERROR: Unexpected \"*\"\n")
-	expectParseError(t, "(class { set*foo() {} })", "<stdin>: ERROR: Unexpected \"*\"\n")
+	expectParseError(t, "(class { get*foo() {} })", "<stdin>: ERROR: Expected \";\" but found \"*\"\n")
+	expectParseError(t, "(class { set*foo() {} })", "<stdin>: ERROR: Expected \";\" but found \"*\"\n")
 	expectParseError(t, "(class { *get foo() {} })", "<stdin>: ERROR: Expected \"(\" but found \"foo\"\n")
 	expectParseError(t, "(class { *set foo() {} })", "<stdin>: ERROR: Expected \"(\" but found \"foo\"\n")
 	expectParseError(t, "(class { *static foo() {} })", "<stdin>: ERROR: Expected \"(\" but found \"foo\"\n")
@@ -6528,6 +6553,23 @@ func TestMangleCatch(t *testing.T) {
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { var x = 2 }", "try {\n  throw 1;\n} catch (x) {\n  var x = 2;\n}\n")
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { eval('x') }", "try {\n  throw 1;\n} catch (x) {\n  eval(\"x\");\n}\n")
 	expectPrintedMangle(t, "if (y) try { throw 1 } catch (x) {} else eval('x')", "if (y) try {\n  throw 1;\n} catch {\n}\nelse eval(\"x\");\n")
+}
+
+func TestMangleEmptyTry(t *testing.T) {
+	expectPrintedMangle(t, "try { throw 0 } catch (e) { foo() }", "try {\n  throw 0;\n} catch {\n  foo();\n}\n")
+	expectPrintedMangle(t, "try {} catch (e) { var foo }", "try {\n} catch {\n  var foo;\n}\n")
+
+	expectPrintedMangle(t, "try {} catch (e) { foo() }", "")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally {}", "")
+
+	expectPrintedMangle(t, "try {} finally { foo() }", "foo();\n")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally { bar() }", "bar();\n")
+
+	expectPrintedMangle(t, "try {} finally { var x = foo() }", "var x = foo();\n")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally { var x = bar() }", "var x = bar();\n")
+
+	expectPrintedMangle(t, "try {} finally { let x = foo() }", "{\n  let x = foo();\n}\n")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally { let x = bar() }", "{\n  let x = bar();\n}\n")
 }
 
 func TestAutoPureForObjectCreate(t *testing.T) {

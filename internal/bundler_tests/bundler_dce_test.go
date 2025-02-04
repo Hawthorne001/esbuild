@@ -1272,9 +1272,9 @@ func TestTreeShakingReactElements(t *testing.T) {
 }
 
 func TestDisableTreeShaking(t *testing.T) {
-	defines := config.ProcessDefines(map[string]config.DefineData{
-		"pure":    {Flags: config.CallCanBeUnwrappedIfUnused},
-		"some.fn": {Flags: config.CallCanBeUnwrappedIfUnused},
+	defines := config.ProcessDefines([]config.DefineData{
+		{KeyParts: []string{"pure"}, Flags: config.CallCanBeUnwrappedIfUnused},
+		{KeyParts: []string{"some", "fn"}, Flags: config.CallCanBeUnwrappedIfUnused},
 	})
 	dce_suite.expectBundled(t, bundled{
 		files: map[string]string{
@@ -1401,6 +1401,31 @@ func TestDeadCodeFollowingJump(t *testing.T) {
 			Mode:          config.ModeBundle,
 			AbsOutputFile: "/out.js",
 			MinifySyntax:  true,
+		},
+	})
+}
+
+func TestDeadCodeInsideEmptyTry(t *testing.T) {
+	dce_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				try { foo() }
+				catch { require('./a') }
+				finally { require('./b') }
+
+				try {}
+				catch { require('./c') }
+				finally { require('./d') }
+			`,
+			"/a.js": ``,
+			"/b.js": ``,
+			"/c.js": `TEST FAILED`, // Dead code paths should not import code
+			"/d.js": ``,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
 		},
 	})
 }
@@ -3121,6 +3146,13 @@ func TestConstValueInliningDirectEval(t *testing.T) {
 					console.log(x, eval('x'))
 				}
 			`,
+			"/issue-4055.ts": `
+				const variable = false
+				;(function () {
+					eval("var variable = true")
+					console.log(variable)
+				})()
+			`,
 		},
 		entryPaths: []string{
 			"/top-level-no-eval.js",
@@ -3129,6 +3161,7 @@ func TestConstValueInliningDirectEval(t *testing.T) {
 			"/nested-eval.js",
 			"/ts-namespace-no-eval.ts",
 			"/ts-namespace-eval.ts",
+			"/issue-4055.ts",
 		},
 		options: config.Options{
 			Mode:         config.ModePassThrough,
