@@ -28,6 +28,9 @@ let mustBeRegExp = (value: RegExp | undefined): string | null =>
 let mustBeInteger = (value: number | undefined): string | null =>
   typeof value === 'number' && value === (value | 0) ? null : 'an integer'
 
+let mustBeValidPortNumber = (value: number | undefined): string | null =>
+  typeof value === 'number' && value === (value | 0) && value >= 0 && value <= 0xFFFF ? null : 'a valid port number'
+
 let mustBeFunction = (value: Function | undefined): string | null =>
   typeof value === 'function' ? null : 'a function'
 
@@ -1091,7 +1094,7 @@ function buildOrContextImpl(
         serve: (options = {}) => new Promise((resolve, reject) => {
           if (!streamIn.hasFS) throw new Error(`Cannot use the "serve" API in this environment`)
           const keys: OptionKeys = {}
-          const port = getFlag(options, keys, 'port', mustBeInteger)
+          const port = getFlag(options, keys, 'port', mustBeValidPortNumber)
           const host = getFlag(options, keys, 'host', mustBeString)
           const servedir = getFlag(options, keys, 'servedir', mustBeString)
           const keyfile = getFlag(options, keys, 'keyfile', mustBeString)
@@ -1350,6 +1353,13 @@ let handlePlugins = async (
   }
 
   requestCallbacks['on-start'] = async (id, request: protocol.OnStartRequest) => {
+    // Reset the "pluginData" map before each new build to avoid a memory leak.
+    // This is done before each new build begins instead of after each build ends
+    // because I believe the current API doesn't restrict when you can call
+    // "resolve" and there may be some uses of it that call it around when the
+    // build ends, and we don't want to accidentally break those use cases.
+    details.clear()
+
     let response: protocol.OnStartResponse = { errors: [], warnings: [] }
     await Promise.all(onStartCallbacks.map(async ({ name, callback, note }) => {
       try {
@@ -1548,6 +1558,7 @@ let handlePlugins = async (
 // even if the JavaScript objects aren't serializable. And we also avoid
 // the overhead of serializing large JavaScript objects.
 interface ObjectStash {
+  clear(): void
   load(id: number): any
   store(value: any): number
 }
@@ -1556,6 +1567,9 @@ function createObjectStash(): ObjectStash {
   const map = new Map<number, any>()
   let nextID = 0
   return {
+    clear() {
+      map.clear()
+    },
     load(id) {
       return map.get(id)
     },

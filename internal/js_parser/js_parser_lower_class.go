@@ -416,8 +416,7 @@ func (p *parser) computeClassLoweringInfo(class *js_ast.Class) (result classLowe
 	// due to the complexity of the decorator specification. The specification is
 	// also still evolving so trying to optimize it now is also potentially
 	// premature.
-	if p.options.unsupportedJSFeatures.Has(compat.Decorators) &&
-		(!p.options.ts.Parse || p.options.ts.Config.ExperimentalDecorators != config.True) {
+	if class.ShouldLowerStandardDecorators {
 		for _, prop := range class.Properties {
 			if len(prop.Decorators) > 0 {
 				for _, prop := range class.Properties {
@@ -896,6 +895,11 @@ func (ctx *lowerClassContext) lowerField(
 			memberExpr = p.callRuntime(loc, "__privateAdd", args)
 			p.recordUsage(ref)
 		} else if private == nil && ctx.class.UseDefineForClassFields {
+			if p.shouldAddKeyComment {
+				if str, ok := prop.Key.Data.(*js_ast.EString); ok {
+					str.HasPropertyKeyComment = true
+				}
+			}
 			args := []js_ast.Expr{target, prop.Key}
 			if _, ok := init.Data.(*js_ast.EUndefined); !ok {
 				args = append(args, init)
@@ -1108,7 +1112,7 @@ func (ctx *lowerClassContext) analyzeProperty(p *parser, prop js_ast.Property, c
 	analysis.private, _ = prop.Key.Data.(*js_ast.EPrivateIdentifier)
 	mustLowerPrivate := analysis.private != nil && p.privateSymbolNeedsToBeLowered(analysis.private)
 	analysis.shouldOmitFieldInitializer = p.options.ts.Parse && !prop.Kind.IsMethodDefinition() && prop.InitializerOrNil.Data == nil &&
-		!ctx.class.UseDefineForClassFields && !mustLowerPrivate
+		!ctx.class.UseDefineForClassFields && !mustLowerPrivate && !ctx.class.ShouldLowerStandardDecorators
 
 	// Class fields must be lowered if the environment doesn't support them
 	if !prop.Kind.IsMethodDefinition() {
@@ -1140,7 +1144,7 @@ func (ctx *lowerClassContext) analyzeProperty(p *parser, prop js_ast.Property, c
 	// they will end up being lowered (if they are even being lowered at all)
 	if p.options.ts.Parse && p.options.ts.Config.ExperimentalDecorators == config.True {
 		analysis.propExperimentalDecorators = prop.Decorators
-	} else if p.options.unsupportedJSFeatures.Has(compat.Decorators) {
+	} else if ctx.class.ShouldLowerStandardDecorators {
 		analysis.propDecorators = prop.Decorators
 	}
 
@@ -1451,7 +1455,7 @@ func (ctx *lowerClassContext) processProperties(p *parser, classLoweringInfo cla
 	propertyKeyTempRefs, decoratorTempRefs := ctx.hoistComputedProperties(p, classLoweringInfo)
 
 	// Save the initializer index for each field and accessor element
-	if p.options.unsupportedJSFeatures.Has(compat.Decorators) && (!p.options.ts.Parse || p.options.ts.Config.ExperimentalDecorators != config.True) {
+	if ctx.class.ShouldLowerStandardDecorators {
 		var counts [4]int
 
 		// Count how many initializers there are in each section
@@ -1484,8 +1488,7 @@ func (ctx *lowerClassContext) processProperties(p *parser, classLoweringInfo cla
 	}
 
 	// Evaluate the decorator expressions inline
-	if p.options.unsupportedJSFeatures.Has(compat.Decorators) && len(ctx.class.Decorators) > 0 &&
-		(!p.options.ts.Parse || p.options.ts.Config.ExperimentalDecorators != config.True) {
+	if ctx.class.ShouldLowerStandardDecorators && len(ctx.class.Decorators) > 0 {
 		name := ctx.nameToKeep
 		if name == "" {
 			name = "class"
@@ -2079,7 +2082,7 @@ func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClass
 	if p.options.ts.Parse && p.options.ts.Config.ExperimentalDecorators == config.True {
 		classExperimentalDecorators = ctx.class.Decorators
 		ctx.class.Decorators = nil
-	} else if p.options.unsupportedJSFeatures.Has(compat.Decorators) {
+	} else if ctx.class.ShouldLowerStandardDecorators {
 		classDecorators = ctx.decoratorClassDecorators
 	}
 

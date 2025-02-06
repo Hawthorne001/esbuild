@@ -3740,6 +3740,62 @@ import "after/alias";
 })();
 `)
   },
+
+  // https://github.com/evanw/esbuild/issues/3915
+  async yarnPnP_stackOverflow({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.jsx')
+
+    await writeFileAsync(entry, `console.log(<div />)`)
+    await writeFileAsync(path.join(testDir, 'tsconfig.json'), `{ "extends": "tsconfigs/config" }`)
+    await mkdirAsync(path.join(testDir, 'packages/tsconfigs/configs'), { recursive: true })
+    await writeFileAsync(path.join(testDir, 'packages/tsconfigs/package.json'), `{ "exports": { "./config": "./configs/tsconfig.json" } }`)
+    await writeFileAsync(path.join(testDir, 'packages/tsconfigs/configs/tsconfig.json'), `{ "compilerOptions": { "jsxFactory": "success" } }`)
+
+    await writeFileAsync(path.join(testDir, '.pnp.data.json'), `{
+      "packageRegistryData": [
+        [null, [
+          [null, {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["tsconfigs", "virtual:some-path"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["tsconfigs", [
+          ["virtual:some-path", {
+            "packageLocation": "./.yarn/__virtual__/tsconfigs-virtual-f56a53910e/1/packages/tsconfigs/",
+            "packageDependencies": [
+              ["tsconfigs", "virtual:some-path"]
+            ],
+            "packagePeers": [],
+            "linkType": "SOFT"
+          }],
+          ["workspace:packages/tsconfigs", {
+            "packageLocation": "./packages/tsconfigs/",
+            "packageDependencies": [
+              ["tsconfigs", "workspace:packages/tsconfigs"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]]
+      ]
+    }`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+      absWorkingDir: testDir,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // entry.jsx
+  console.log(/* @__PURE__ */ success("div", null));
+})();
+`)
+  },
 }
 
 function fetch(host, port, path, { headers, method = 'GET' } = {}) {
@@ -3954,7 +4010,7 @@ let watchTests = {
         )
         assert.strictEqual(result2.errors.length, 1)
         assert.strictEqual(result2.errors[0].text, 'Expected ";" but found "2"')
-        assert.strictEqual(await readFileAsync(outfile, 'utf8'), 'throw 3;\n')
+        assert.strictEqual(fs.existsSync(outfile), false)
       }
 
       // Fourth rebuild: edit
@@ -3975,8 +4031,7 @@ let watchTests = {
           result => result.errors.length > 0,
         )
         assert.strictEqual(result2.errors.length, 1)
-        assert.strictEqual(await readFileAsync(outfile, 'utf8'), 'throw 4;\n')
-        assert.strictEqual(await readFileAsync(outfile, 'utf8'), 'throw 4;\n')
+        assert.strictEqual(fs.existsSync(outfile), false)
       }
 
       // Sixth rebuild: restore
@@ -5953,6 +6008,22 @@ class Foo {
 π["π 𐀀"]["𐀀"]["𐀀 π"] = `)
   },
 
+  async iifeGlobalNameThis({ esbuild }) {
+    const { code } = await esbuild.transform(`export default 123`, { format: 'iife', globalName: 'this.foo.bar' })
+    const globals = {}
+    vm.createContext(globals)
+    vm.runInContext(code, globals)
+    assert.strictEqual(globals.foo.bar.default, 123)
+    assert.strictEqual(code.slice(0, code.indexOf('(() => {\n')), `(this.foo ||= {}).bar = `)
+  },
+
+  async iifeGlobalNameImportMeta({ esbuild }) {
+    const { code } = await esbuild.transform(`export default 123`, { format: 'iife', globalName: 'import.meta.foo.bar' })
+    const { default: import_meta } = await import('data:text/javascript,' + code + '\nexport default import.meta')
+    assert.strictEqual(import_meta.foo.bar.default, 123)
+    assert.strictEqual(code.slice(0, code.indexOf('(() => {\n')), `(import.meta.foo ||= {}).bar = `)
+  },
+
   async jsx({ esbuild }) {
     const { code } = await esbuild.transform(`console.log(<div/>)`, { loader: 'jsx' })
     assert.strictEqual(code, `console.log(/* @__PURE__ */ React.createElement("div", null));\n`)
@@ -6009,17 +6080,57 @@ class Foo {
   },
 
   async dropConsole({ esbuild }) {
-    const { code } = await esbuild.transform(`
-      console('foo')
+    const { code: drop } = await esbuild.transform(`
       console.log('foo')
       console.log(foo())
+      console.log.call(console, foo())
+      console.log.apply(console, foo())
       x = console.log(bar())
+      console['log']('foo')
+    `, { drop: ['console'] })
+    assert.strictEqual(drop, `x = void 0;\n`)
+
+    const { code: keepArrow } = await esbuild.transform(`
+      console('foo')
       console.abc.xyz('foo')
       console['log']('foo')
       console[abc][xyz]('foo')
       console[foo()][bar()]('foo')
+      const x = {
+        log: console.log.bind(console),
+      }
     `, { drop: ['console'] })
-    assert.strictEqual(code, `console("foo");\nx = void 0;\n`)
+    assert.strictEqual(keepArrow, `console("foo");
+(() => {
+}).xyz("foo");
+console[abc][xyz]("foo");
+console[foo()][bar()]("foo");
+const x = {
+  log: (() => {
+  }).bind(console)
+};
+`)
+
+    const { code: keepFn } = await esbuild.transform(`
+      console('foo')
+      console.abc.xyz('foo')
+      console['log']('foo')
+      console[abc][xyz]('foo')
+      console[foo()][bar()]('foo')
+      const x = {
+        log: console.log.bind(console),
+      }
+    `, { drop: ['console'], supported: { arrow: false } })
+    assert.strictEqual(keepFn, `console("foo");
+(function() {
+}).xyz("foo");
+console[abc][xyz]("foo");
+console[foo()][bar()]("foo");
+const x = {
+  log: function() {
+  }.bind(console)
+};
+`)
   },
 
   async keepDebugger({ esbuild }) {
@@ -6032,7 +6143,7 @@ class Foo {
     assert.strictEqual(code, `if (x) ;\n`)
   },
 
-  async define({ esbuild }) {
+  async defineProcessEnvNodeEnv({ esbuild }) {
     const define = { 'process.env.NODE_ENV': '"something"' }
 
     const { code: code1 } = await esbuild.transform(`console.log(process.env.NODE_ENV)`, { define })
@@ -6067,13 +6178,19 @@ class Foo {
   },
 
   async defineThis({ esbuild }) {
-    const { code } = await esbuild.transform(`console.log(a, b); export {}`, { define: { a: 'this', b: 'this.foo' }, format: 'esm' })
-    assert.strictEqual(code, `console.log(void 0, (void 0).foo);\n`)
+    const { code: code1 } = await esbuild.transform(`console.log(a, b); export {}`, { define: { a: 'this', b: 'this.foo' }, format: 'esm' })
+    assert.strictEqual(code1, `console.log(void 0, (void 0).foo);\n`)
+
+    const { code: code2 } = await esbuild.transform(`console.log(this, this.x); export {}`, { define: { this: 'a', 'this.x': 'b' }, format: 'esm' })
+    assert.strictEqual(code2, `console.log(a, b);\n`)
   },
 
   async defineImportMetaESM({ esbuild }) {
-    const { code } = await esbuild.transform(`console.log(a, b); export {}`, { define: { a: 'import.meta', b: 'import.meta.foo' }, format: 'esm' })
-    assert.strictEqual(code, `console.log(import.meta, import.meta.foo);\n`)
+    const { code: code1 } = await esbuild.transform(`console.log(a, b); export {}`, { define: { a: 'import.meta', b: 'import.meta.foo' }, format: 'esm' })
+    assert.strictEqual(code1, `console.log(import.meta, import.meta.foo);\n`)
+
+    const { code: code2 } = await esbuild.transform(`console.log(import.meta, import.meta.x); export {}`, { define: { 'import.meta': 'a', 'import.meta.x': 'b' }, format: 'esm' })
+    assert.strictEqual(code2, `console.log(a, b);\n`)
   },
 
   async defineImportMetaIIFE({ esbuild }) {
@@ -6107,6 +6224,50 @@ class Foo {
         ╵                                   '"production"'
 
 `)
+  },
+
+  async defineQuotedPropertyNameTransform({ esbuild }) {
+    const { code: code1 } = await esbuild.transform(`return x.y['z!']`, { define: { 'x.y["z!"]': 'true' } })
+    assert.strictEqual(code1, `return true;\n`)
+
+    const { code: code2 } = await esbuild.transform(`foo(x['y'].z, x.y['z'], x['y']['z'])`, { define: { 'x.y.z': 'true' } })
+    assert.strictEqual(code2, `foo(true, true, true);\n`)
+
+    const { code: code3 } = await esbuild.transform(`foo(x['y'].z, x.y['z'], x['y']['z'])`, { define: { 'x["y"].z': 'true' } })
+    assert.strictEqual(code3, `foo(true, true, true);\n`)
+
+    const { code: code4 } = await esbuild.transform(`foo(x['y'].z, x.y['z'], x['y']['z'])`, { define: { 'x.y["z"]': 'true' } })
+    assert.strictEqual(code4, `foo(true, true, true);\n`)
+
+    const { code: code5 } = await esbuild.transform(`foo(x['y'].z, x.y['z'], x['y']['z'])`, { define: { 'x["y"][\'z\']': 'true' } })
+    assert.strictEqual(code5, `foo(true, true, true);\n`)
+
+    const { code: code6 } = await esbuild.transform(`foo(import.meta['y'].z, import.meta.y['z'], import.meta['y']['z'])`, { define: { 'import.meta["y"].z': 'true' } })
+    assert.strictEqual(code6, `foo(true, true, true);\n`)
+
+    const { code: code7 } = await esbuild.transform(`foo(import.meta['y!'].z, import.meta.y['z!'], import.meta['y!']['z!'])`, {
+      define: {
+        'import.meta["y!"].z': 'true',
+        'import.meta.y["z!"]': 'true',
+        'import.meta["y!"]["z!"]': 'true'
+      },
+    })
+    assert.strictEqual(code7, `foo(true, true, true);\n`)
+  },
+
+
+  async defineQuotedPropertyNameBuild({ esbuild }) {
+    const { outputFiles } = await esbuild.build({
+      stdin: { contents: `return process.env['SOME-TEST-VAR']` },
+      define: { 'process.env["SOME-TEST-VAR"]': 'true' },
+      write: false,
+    })
+    assert.strictEqual(outputFiles[0].text, `return true;\n`)
+  },
+
+  async defineBigInt({ esbuild }) {
+    const { code } = await esbuild.transform(`console.log(a, b); export {}`, { define: { a: '0n', b: '{"x":[123n]}' }, format: 'esm' })
+    assert.strictEqual(code, `var define_b_default = { x: [123n] };\nconsole.log(0n, define_b_default);\n`)
   },
 
   async json({ esbuild }) {
@@ -6444,6 +6605,14 @@ class Foo {
     assert.strictEqual(code2, `foo;\n`)
   },
 
+  async pureImportMeta({ esbuild }) {
+    const { code: code1 } = await esbuild.transform(`import.meta.foo(123, foo)`, { minifySyntax: true, pure: [] })
+    assert.strictEqual(code1, `import.meta.foo(123, foo);\n`)
+
+    const { code: code2 } = await esbuild.transform(`import.meta.foo(123, foo)`, { minifySyntax: true, pure: ['import.meta.foo'] })
+    assert.strictEqual(code2, `foo;\n`)
+  },
+
   async nameCollisionEvalRename({ esbuild }) {
     const { code } = await esbuild.transform(`
       // "arg" must not be renamed to "arg2"
@@ -6747,11 +6916,11 @@ class Foo {
 
   async multipleEngineTargetsNotSupported({ esbuild }) {
     try {
-      await esbuild.transform(`0n`, { target: ['es5', 'chrome1', 'safari2', 'firefox3'] })
+      await esbuild.transform(`class X {}`, { target: ['es5', 'chrome1', 'safari2', 'firefox3'] })
       throw new Error('Expected an error to be thrown')
     } catch (e) {
       assert.strictEqual(e.errors[0].text,
-        'Big integer literals are not available in the configured target environment ("chrome1", "es5", "firefox3", "safari2")')
+        'Transforming class syntax to the configured target environment ("chrome1", "es5", "firefox3", "safari2") is not supported yet')
     }
   },
 
@@ -6775,12 +6944,12 @@ class Foo {
       check({ supported: { arrow: false }, target: 'es2022' }, `x = () => y`, `x = function() {\n  return y;\n};\n`),
 
       // JS: error
-      check({ supported: { bigint: true } }, `x = 1n`, `x = 1n;\n`),
-      check({ supported: { bigint: false } }, `x = 1n`, `Big integer literals are not available in the configured target environment`),
-      check({ supported: { bigint: true }, target: 'es5' }, `x = 1n`, `x = 1n;\n`),
-      check({ supported: { bigint: false }, target: 'es5' }, `x = 1n`, `Big integer literals are not available in the configured target environment ("es5" + 1 override)`),
-      check({ supported: { bigint: true }, target: 'es2022' }, `x = 1n`, `x = 1n;\n`),
-      check({ supported: { bigint: false }, target: 'es2022' }, `x = 1n`, `Big integer literals are not available in the configured target environment ("es2022" + 1 override)`),
+      check({ supported: { class: true } }, `class X {}`, `class X {\n}\n`),
+      check({ supported: { class: false } }, `class X {}`, `Transforming class syntax to the configured target environment is not supported yet`),
+      check({ supported: { class: true }, target: 'es5' }, `class X {}`, `class X {\n}\n`),
+      check({ supported: { class: false }, target: 'es5' }, `class X {}`, `Transforming class syntax to the configured target environment ("es5" + 11 overrides) is not supported yet`),
+      check({ supported: { class: true }, target: 'es6' }, `class X {}`, `class X {\n}\n`),
+      check({ supported: { class: false }, target: 'es6' }, `class X {}`, `Transforming class syntax to the configured target environment ("es2015" + 11 overrides) is not supported yet`),
 
       // CSS: lower
       check({ supported: { 'hex-rgba': true }, loader: 'css' }, `a { color: #1234 }`, `a {\n  color: #1234;\n}\n`),
@@ -6789,7 +6958,7 @@ class Foo {
       check({ target: 'safari15.4', loader: 'css' }, `a { mask-image: url(x.png) }`, `a {\n  mask-image: url(x.png);\n}\n`),
 
       // Check for "+ 2 overrides"
-      check({ supported: { bigint: false, arrow: true }, target: 'es2022' }, `x = 1n`, `Big integer literals are not available in the configured target environment ("es2022" + 2 overrides)`),
+      check({ supported: { class: false, arrow: true }, target: 'es2022' }, `class X {}`, `Transforming class syntax to the configured target environment ("es2022" + 12 overrides) is not supported yet`),
     ])
   },
 
@@ -6833,9 +7002,6 @@ class Foo {
   },
 
   // Future syntax
-  bigInt: ({ esbuild }) => futureSyntax(esbuild, '123n', 'es2019', 'es2020'),
-  bigIntKey: ({ esbuild }) => futureSyntax(esbuild, '({123n: 0})', 'es2019', 'es2020'),
-  bigIntPattern: ({ esbuild }) => futureSyntax(esbuild, 'let {123n: x} = y', 'es2019', 'es2020'),
   nonIdArrayRest: ({ esbuild }) => futureSyntax(esbuild, 'let [...[x]] = y', 'es2015', 'es2016'),
   topLevelAwait: ({ esbuild }) => futureSyntax(esbuild, 'await foo', 'es2020', 'esnext'),
   topLevelForAwait: ({ esbuild }) => futureSyntax(esbuild, 'for await (foo of bar) ;', 'es2020', 'esnext'),
