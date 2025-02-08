@@ -230,6 +230,13 @@ func expectPrintedJSXAutomatic(t *testing.T, options JSXAutomaticTestOptions, co
 	})
 }
 
+func TestUnOp(t *testing.T) {
+	// This was important to someone for a very obscure reason. See
+	// https://github.com/evanw/esbuild/issues/4041 for more info.
+	expectPrinted(t, "let x; void 0; x", "let x;\nx;\n")
+	expectPrinted(t, "let x; void x; x", "let x;\nvoid x;\nx;\n")
+}
+
 func TestBinOp(t *testing.T) {
 	for code, entry := range js_ast.OpTable {
 		opCode := js_ast.OpCode(code)
@@ -1372,6 +1379,14 @@ func TestObject(t *testing.T) {
 	expectPrintedMangle(t, "x = { '2147483648': y }", "x = { \"2147483648\": y };\n")
 	expectPrintedMangle(t, "x = { '-2147483648': y }", "x = { \"-2147483648\": y };\n")
 	expectPrintedMangle(t, "x = { '-2147483649': y }", "x = { \"-2147483649\": y };\n")
+
+	// See: https://github.com/microsoft/TypeScript/pull/60225
+	expectPrinted(t, "x = { get \n x() {} }", "x = { get x() {\n} };\n")
+	expectPrinted(t, "x = { set \n x(_) {} }", "x = { set x(_) {\n} };\n")
+	expectParseError(t, "x = { get \n *x() {} }", "<stdin>: ERROR: Expected \"}\" but found \"*\"\n")
+	expectParseError(t, "x = { set \n *x(_) {} }", "<stdin>: ERROR: Expected \"}\" but found \"*\"\n")
+	expectParseError(t, "x = { get \n async x() {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
+	expectParseError(t, "x = { set \n async x(_) {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
 }
 
 func TestComputedProperty(t *testing.T) {
@@ -1797,6 +1812,16 @@ func TestClass(t *testing.T) {
 
 	// Make sure direct "eval" doesn't cause the class name to change
 	expectPrinted(t, "class Foo { foo = [Foo, eval(bar)] }", "class Foo {\n  foo = [Foo, eval(bar)];\n}\n")
+
+	// See: https://github.com/microsoft/TypeScript/pull/60225
+	expectPrinted(t, "class A { get \n x() {} }", "class A {\n  get x() {\n  }\n}\n")
+	expectPrinted(t, "class A { set \n x(_) {} }", "class A {\n  set x(_) {\n  }\n}\n")
+	expectPrinted(t, "class A { get \n *x() {} }", "class A {\n  get;\n  *x() {\n  }\n}\n")
+	expectPrinted(t, "class A { set \n *x(_) {} }", "class A {\n  set;\n  *x(_) {\n  }\n}\n")
+	expectParseError(t, "class A { get \n async x() {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
+	expectParseError(t, "class A { set \n async x(_) {} }", "<stdin>: ERROR: Expected \"(\" but found \"x\"\n")
+	expectParseError(t, "class A { async get \n *x() {} }", "<stdin>: ERROR: Expected \"(\" but found \"*\"\n")
+	expectParseError(t, "class A { async set \n *x(_) {} }", "<stdin>: ERROR: Expected \"(\" but found \"*\"\n")
 }
 
 func TestSuperCall(t *testing.T) {
@@ -2185,8 +2210,8 @@ __privateAdd(Foo, _x, __runInitializers(_init, 8, Foo)), __runInitializers(_init
 func TestGenerator(t *testing.T) {
 	expectParseError(t, "(class { * foo })", "<stdin>: ERROR: Expected \"(\" but found \"}\"\n")
 	expectParseError(t, "(class { * *foo() {} })", "<stdin>: ERROR: Unexpected \"*\"\n")
-	expectParseError(t, "(class { get*foo() {} })", "<stdin>: ERROR: Unexpected \"*\"\n")
-	expectParseError(t, "(class { set*foo() {} })", "<stdin>: ERROR: Unexpected \"*\"\n")
+	expectParseError(t, "(class { get*foo() {} })", "<stdin>: ERROR: Expected \";\" but found \"*\"\n")
+	expectParseError(t, "(class { set*foo() {} })", "<stdin>: ERROR: Expected \";\" but found \"*\"\n")
 	expectParseError(t, "(class { *get foo() {} })", "<stdin>: ERROR: Expected \"(\" but found \"foo\"\n")
 	expectParseError(t, "(class { *set foo() {} })", "<stdin>: ERROR: Expected \"(\" but found \"foo\"\n")
 	expectParseError(t, "(class { *static foo() {} })", "<stdin>: ERROR: Expected \"(\" but found \"foo\"\n")
@@ -2751,6 +2776,43 @@ func TestSwitch(t *testing.T) {
 	expectPrinted(t, "switch (x) { default: }", "switch (x) {\n  default:\n}\n")
 	expectPrinted(t, "switch ((x => x + 1)(0)) { case 1: var y } y = 2", "switch (((x) => x + 1)(0)) {\n  case 1:\n    var y;\n}\ny = 2;\n")
 	expectParseError(t, "switch (x) { default: default: }", "<stdin>: ERROR: Multiple default clauses are not allowed\n")
+
+	expectPrintedMangle(t, "switch (x) {}", "x;\n")
+	expectPrintedMangle(t, "switch (x) { case x: a(); break; case y: b(); break }", "switch (x) {\n  case x:\n    a();\n    break;\n  case y:\n    b();\n    break;\n}\n")
+
+	expectPrintedMangle(t, "switch (0) { default: a() }", "a();\n")
+	expectPrintedMangle(t, "switch (x) { default: a() }", "switch (x) {\n  default:\n    a();\n}\n")
+
+	expectPrintedMangle(t, "switch (0) { case 0: a(); break; case 1: b(); break }", "a();\n")
+	expectPrintedMangle(t, "switch (1) { case 0: a(); break; case 1: b(); break }", "b();\n")
+	expectPrintedMangle(t, "switch (2) { case 0: a(); break; case 1: b(); break }", "")
+
+	expectPrintedMangle(t, "switch (0) { case 0: a(); case 1: b(); break }", "switch (0) {\n  case 0:\n    a();\n  case 1:\n    b();\n    break;\n}\n")
+	expectPrintedMangle(t, "switch (1) { case 0: a(); case 1: b(); break }", "b();\n")
+	expectPrintedMangle(t, "switch (2) { case 0: a(); case 1: b(); break }", "")
+
+	expectPrintedMangle(t, "switch (0) { case 0: a(); break; default: b(); break }", "a();\n")
+	expectPrintedMangle(t, "switch (1) { case 0: a(); break; default: b(); break }", "b();\n")
+
+	expectPrintedMangle(t, "switch (0) { case 0: { a(); break; } case 1: b(); break }", "a();\n")
+	expectPrintedMangle(t, "switch (0) { case 0: { var x = a(); break; } case 1: b(); break }", "var x = a();\n")
+	expectPrintedMangle(t, "switch (0) { case 0: { let x = a(); break; } case 1: b(); break }", "{\n  let x = a();\n}\n")
+	expectPrintedMangle(t, "switch (0) { case 0: { const x = a(); break; } case 1: b(); break }", "{\n  const x = a();\n}\n")
+
+	expectPrintedMangle(t, "for (x of y) switch (0) { case 0: a(); continue; default: b(); continue }", "for (x of y) a();\n")
+	expectPrintedMangle(t, "for (x of y) switch (1) { case 0: a(); continue; default: b(); continue }", "for (x of y) b();\n")
+
+	expectPrintedMangle(t, "for (x of y) switch (0) { case 0: throw a(); default: throw b() }", "for (x of y) throw a();\n")
+	expectPrintedMangle(t, "for (x of y) switch (1) { case 0: throw a(); default: throw b() }", "for (x of y) throw b();\n")
+
+	expectPrintedMangle(t, "for (x of y) switch (0) { case 0: return a(); default: return b() }", "for (x of y) return a();\n")
+	expectPrintedMangle(t, "for (x of y) switch (1) { case 0: return a(); default: return b() }", "for (x of y) return b();\n")
+
+	expectPrintedMangle(t, "z: for (x of y) switch (0) { case 0: a(); break z; default: b(); break z }", "z: for (x of y) switch (0) {\n  case 0:\n    a();\n    break z;\n}\n")
+	expectPrintedMangle(t, "z: for (x of y) switch (1) { case 0: a(); break z; default: b(); break z }", "z: for (x of y) switch (1) {\n  default:\n    b();\n    break z;\n}\n")
+
+	expectPrintedMangle(t, "for (x of y) z: switch (0) { case 0: a(); break z; default: b(); break z }", "for (x of y) z: switch (0) {\n  case 0:\n    a();\n    break z;\n}\n")
+	expectPrintedMangle(t, "for (x of y) z: switch (1) { case 0: a(); break z; default: b(); break z }", "for (x of y) z: switch (1) {\n  default:\n    b();\n    break z;\n}\n")
 }
 
 func TestConstantFolding(t *testing.T) {
@@ -2835,14 +2897,14 @@ func TestConstantFolding(t *testing.T) {
 
 	expectPrinted(t, "x = 1 === 1", "x = true;\n")
 	expectPrinted(t, "x = 1 === 2", "x = false;\n")
-	expectPrinted(t, "x = 1 === '1'", "x = 1 === \"1\";\n")
+	expectPrinted(t, "x = 1 === '1'", "x = false;\n")
 	expectPrinted(t, "x = 1 == 1", "x = true;\n")
 	expectPrinted(t, "x = 1 == 2", "x = false;\n")
 	expectPrinted(t, "x = 1 == '1'", "x = 1 == \"1\";\n")
 
 	expectPrinted(t, "x = 1 !== 1", "x = false;\n")
 	expectPrinted(t, "x = 1 !== 2", "x = true;\n")
-	expectPrinted(t, "x = 1 !== '1'", "x = 1 !== \"1\";\n")
+	expectPrinted(t, "x = 1 !== '1'", "x = true;\n")
 	expectPrinted(t, "x = 1 != 1", "x = false;\n")
 	expectPrinted(t, "x = 1 != 2", "x = true;\n")
 	expectPrinted(t, "x = 1 != '1'", "x = 1 != \"1\";\n")
@@ -2907,6 +2969,8 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = 0n !== 1n", "x = true;\n")
 	expectPrinted(t, "x = 0n !== 0n", "x = false;\n")
 	expectPrinted(t, "x = 123n === 1_2_3n", "x = true;\n")
+	expectPrinted(t, "x = 0n === '1n'", "x = false;\n")
+	expectPrinted(t, "x = 0n !== '1n'", "x = true;\n")
 
 	expectPrinted(t, "x = 0n === 0b0n", "x = 0n === 0b0n;\n")
 	expectPrinted(t, "x = 0n === 0o0n", "x = 0n === 0o0n;\n")
@@ -3729,8 +3793,12 @@ func TestMangleBooleanConstructor(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "a = Boolean(b ? c > 0 : c < 0)", "a = Boolean(b ? c > 0 : c < 0);\n", "a = b ? c > 0 : c < 0;\n")
 
 	// Check for calling "SimplifyBooleanExpr" on the argument
-	expectPrintedNormalAndMangle(t, "a = Boolean((b | c) !== 0)", "a = Boolean((b | c) !== 0);\n", "a = !!(b | c);\n")
-	expectPrintedNormalAndMangle(t, "a = Boolean(b ? (c | d) !== 0 : (d | e) !== 0)", "a = Boolean(b ? (c | d) !== 0 : (d | e) !== 0);\n", "a = !!(b ? c | d : d | e);\n")
+	expectPrintedNormalAndMangle(t, "a = Boolean((b | c) !== 0)", "a = Boolean((b | c) !== 0);\n", "a = (b | c) !== 0;\n")
+	expectPrintedNormalAndMangle(t, "a = Boolean((b >>> c) !== 0)", "a = Boolean(b >>> c !== 0);\n", "a = !!(b >>> c);\n")
+	expectPrintedNormalAndMangle(t, "a = Boolean(b ? (c | d) !== 0 : (d | e) !== 0)",
+		"a = Boolean(b ? (c | d) !== 0 : (d | e) !== 0);\n", "a = b ? (c | d) !== 0 : (d | e) !== 0;\n")
+	expectPrintedNormalAndMangle(t, "a = Boolean(b ? (c >>> d) !== 0 : (d >>> e) !== 0)",
+		"a = Boolean(b ? c >>> d !== 0 : d >>> e !== 0);\n", "a = !!(b ? c >>> d : d >>> e);\n")
 }
 
 func TestMangleNumberConstructor(t *testing.T) {
@@ -4077,44 +4145,44 @@ func TestMangleIf(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "if (!!a ? !!b : !!c) throw 0", "if (!!a ? !!b : !!c) throw 0;\n", "if (a ? b : c) throw 0;\n")
 
 	expectPrintedNormalAndMangle(t, "if ((a + b) !== 0) throw 0", "if (a + b !== 0) throw 0;\n", "if (a + b !== 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a | b) !== 0) throw 0", "if ((a | b) !== 0) throw 0;\n", "if (a | b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a & b) !== 0) throw 0", "if ((a & b) !== 0) throw 0;\n", "if (a & b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a ^ b) !== 0) throw 0", "if ((a ^ b) !== 0) throw 0;\n", "if (a ^ b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a << b) !== 0) throw 0", "if (a << b !== 0) throw 0;\n", "if (a << b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a >> b) !== 0) throw 0", "if (a >> b !== 0) throw 0;\n", "if (a >> b) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a | b) !== 0) throw 0", "if ((a | b) !== 0) throw 0;\n", "if ((a | b) !== 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a & b) !== 0) throw 0", "if ((a & b) !== 0) throw 0;\n", "if ((a & b) !== 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a ^ b) !== 0) throw 0", "if ((a ^ b) !== 0) throw 0;\n", "if ((a ^ b) !== 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a << b) !== 0) throw 0", "if (a << b !== 0) throw 0;\n", "if (a << b !== 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a >> b) !== 0) throw 0", "if (a >> b !== 0) throw 0;\n", "if (a >> b !== 0) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if ((a >>> b) !== 0) throw 0", "if (a >>> b !== 0) throw 0;\n", "if (a >>> b) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if (+a !== 0) throw 0", "if (+a !== 0) throw 0;\n", "if (+a != 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (~a !== 0) throw 0", "if (~a !== 0) throw 0;\n", "if (~a) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (~a !== 0) throw 0", "if (~a !== 0) throw 0;\n", "if (~a !== 0) throw 0;\n")
 
 	expectPrintedNormalAndMangle(t, "if (0 != (a + b)) throw 0", "if (0 != a + b) throw 0;\n", "if (a + b != 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 != (a | b)) throw 0", "if (0 != (a | b)) throw 0;\n", "if (a | b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 != (a & b)) throw 0", "if (0 != (a & b)) throw 0;\n", "if (a & b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 != (a ^ b)) throw 0", "if (0 != (a ^ b)) throw 0;\n", "if (a ^ b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 != (a << b)) throw 0", "if (0 != a << b) throw 0;\n", "if (a << b) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 != (a >> b)) throw 0", "if (0 != a >> b) throw 0;\n", "if (a >> b) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 != (a | b)) throw 0", "if (0 != (a | b)) throw 0;\n", "if ((a | b) != 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 != (a & b)) throw 0", "if (0 != (a & b)) throw 0;\n", "if ((a & b) != 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 != (a ^ b)) throw 0", "if (0 != (a ^ b)) throw 0;\n", "if ((a ^ b) != 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 != (a << b)) throw 0", "if (0 != a << b) throw 0;\n", "if (a << b != 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 != (a >> b)) throw 0", "if (0 != a >> b) throw 0;\n", "if (a >> b != 0) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if (0 != (a >>> b)) throw 0", "if (0 != a >>> b) throw 0;\n", "if (a >>> b) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if (0 != +a) throw 0", "if (0 != +a) throw 0;\n", "if (+a != 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 != ~a) throw 0", "if (0 != ~a) throw 0;\n", "if (~a) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 != ~a) throw 0", "if (0 != ~a) throw 0;\n", "if (~a != 0) throw 0;\n")
 
 	expectPrintedNormalAndMangle(t, "if ((a + b) === 0) throw 0", "if (a + b === 0) throw 0;\n", "if (a + b === 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a | b) === 0) throw 0", "if ((a | b) === 0) throw 0;\n", "if (!(a | b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a & b) === 0) throw 0", "if ((a & b) === 0) throw 0;\n", "if (!(a & b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a ^ b) === 0) throw 0", "if ((a ^ b) === 0) throw 0;\n", "if (!(a ^ b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a << b) === 0) throw 0", "if (a << b === 0) throw 0;\n", "if (!(a << b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if ((a >> b) === 0) throw 0", "if (a >> b === 0) throw 0;\n", "if (!(a >> b)) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a | b) === 0) throw 0", "if ((a | b) === 0) throw 0;\n", "if ((a | b) === 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a & b) === 0) throw 0", "if ((a & b) === 0) throw 0;\n", "if ((a & b) === 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a ^ b) === 0) throw 0", "if ((a ^ b) === 0) throw 0;\n", "if ((a ^ b) === 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a << b) === 0) throw 0", "if (a << b === 0) throw 0;\n", "if (a << b === 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if ((a >> b) === 0) throw 0", "if (a >> b === 0) throw 0;\n", "if (a >> b === 0) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if ((a >>> b) === 0) throw 0", "if (a >>> b === 0) throw 0;\n", "if (!(a >>> b)) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if (+a === 0) throw 0", "if (+a === 0) throw 0;\n", "if (+a == 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (~a === 0) throw 0", "if (~a === 0) throw 0;\n", "if (!~a) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (~a === 0) throw 0", "if (~a === 0) throw 0;\n", "if (~a === 0) throw 0;\n")
 
 	expectPrintedNormalAndMangle(t, "if (0 == (a + b)) throw 0", "if (0 == a + b) throw 0;\n", "if (a + b == 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 == (a | b)) throw 0", "if (0 == (a | b)) throw 0;\n", "if (!(a | b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 == (a & b)) throw 0", "if (0 == (a & b)) throw 0;\n", "if (!(a & b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 == (a ^ b)) throw 0", "if (0 == (a ^ b)) throw 0;\n", "if (!(a ^ b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 == (a << b)) throw 0", "if (0 == a << b) throw 0;\n", "if (!(a << b)) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 == (a >> b)) throw 0", "if (0 == a >> b) throw 0;\n", "if (!(a >> b)) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 == (a | b)) throw 0", "if (0 == (a | b)) throw 0;\n", "if ((a | b) == 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 == (a & b)) throw 0", "if (0 == (a & b)) throw 0;\n", "if ((a & b) == 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 == (a ^ b)) throw 0", "if (0 == (a ^ b)) throw 0;\n", "if ((a ^ b) == 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 == (a << b)) throw 0", "if (0 == a << b) throw 0;\n", "if (a << b == 0) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 == (a >> b)) throw 0", "if (0 == a >> b) throw 0;\n", "if (a >> b == 0) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if (0 == (a >>> b)) throw 0", "if (0 == a >>> b) throw 0;\n", "if (!(a >>> b)) throw 0;\n")
 	expectPrintedNormalAndMangle(t, "if (0 == +a) throw 0", "if (0 == +a) throw 0;\n", "if (+a == 0) throw 0;\n")
-	expectPrintedNormalAndMangle(t, "if (0 == ~a) throw 0", "if (0 == ~a) throw 0;\n", "if (!~a) throw 0;\n")
+	expectPrintedNormalAndMangle(t, "if (0 == ~a) throw 0", "if (0 == ~a) throw 0;\n", "if (~a == 0) throw 0;\n")
 }
 
 func TestMangleWrapToAvoidAmbiguousElse(t *testing.T) {
@@ -6528,6 +6596,27 @@ func TestMangleCatch(t *testing.T) {
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { var x = 2 }", "try {\n  throw 1;\n} catch (x) {\n  var x = 2;\n}\n")
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { eval('x') }", "try {\n  throw 1;\n} catch (x) {\n  eval(\"x\");\n}\n")
 	expectPrintedMangle(t, "if (y) try { throw 1 } catch (x) {} else eval('x')", "if (y) try {\n  throw 1;\n} catch {\n}\nelse eval(\"x\");\n")
+}
+
+func TestMangleTry(t *testing.T) {
+	expectPrintedMangle(t, "try { throw 0 } catch (e) { foo() }", "try {\n  throw 0;\n} catch {\n  foo();\n}\n")
+	expectPrintedMangle(t, "try {} catch (e) { var foo }", "try {\n} catch {\n  var foo;\n}\n")
+
+	expectPrintedMangle(t, "try {} catch (e) { foo() }", "")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally {}", "")
+
+	expectPrintedMangle(t, "try {} finally { foo() }", "foo();\n")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally { bar() }", "bar();\n")
+
+	expectPrintedMangle(t, "try {} finally { var x = foo() }", "var x = foo();\n")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally { var x = bar() }", "var x = bar();\n")
+
+	expectPrintedMangle(t, "try {} finally { let x = foo() }", "{\n  let x = foo();\n}\n")
+	expectPrintedMangle(t, "try {} catch (e) { foo() } finally { let x = bar() }", "{\n  let x = bar();\n}\n")
+
+	// The Kotlin compiler apparently generates code like this.
+	// See https://github.com/evanw/esbuild/issues/4064 for info.
+	expectPrintedMangle(t, "x: try { while (true) ; break x } catch {}", "x: try {\n  for (; ; ) ;\n  break x;\n} catch {\n}\n")
 }
 
 func TestAutoPureForObjectCreate(t *testing.T) {

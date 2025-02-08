@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.22\.4 ' || (echo 'Please install Go version 1.22.4' && false)
+	@go version | grep ' go1\.23\.5 ' || (echo 'Please install Go version 1.23.5' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -69,6 +69,7 @@ test-deno: esbuild platform-deno
 	@echo '✅ deno tests passed' # I couldn't find a Deno API for telling when tests have failed, so I'm doing this here instead
 	deno eval 'import { transform, stop } from "file://$(shell pwd)/deno/mod.js"; console.log((await transform("1+2")).code); stop()' | grep "1 + 2;"
 	deno eval 'import { transform, stop } from "file://$(shell pwd)/deno/wasm.js"; console.log((await transform("1+2")).code); stop()' | grep "1 + 2;"
+	deno run -A './deno/mod.js' # See: https://github.com/evanw/esbuild/pull/3917
 
 test-deno-windows: esbuild platform-deno
 	ESBUILD_BINARY_PATH=./esbuild.exe deno test --allow-run --allow-env --allow-net --allow-read --allow-write --no-check scripts/deno-tests.js
@@ -302,6 +303,7 @@ platform-all:
 		platform-linux-riscv64 \
 		platform-linux-s390x \
 		platform-linux-x64 \
+		platform-netbsd-arm64 \
 		platform-netbsd-x64 \
 		platform-neutral \
 		platform-openbsd-arm64 \
@@ -360,6 +362,9 @@ platform-freebsd-x64:
 platform-freebsd-arm64:
 	@$(MAKE) --no-print-directory GOOS=freebsd GOARCH=arm64 NPMDIR=npm/@esbuild/freebsd-arm64 platform-unixlike
 
+platform-netbsd-arm64:
+	@$(MAKE) --no-print-directory GOOS=netbsd GOARCH=arm64 NPMDIR=npm/@esbuild/netbsd-arm64 platform-unixlike
+
 platform-netbsd-x64:
 	@$(MAKE) --no-print-directory GOOS=netbsd GOARCH=amd64 NPMDIR=npm/@esbuild/netbsd-x64 platform-unixlike
 
@@ -411,6 +416,7 @@ platform-deno: platform-wasm
 	node scripts/esbuild.js ./esbuild --deno
 
 publish-all: check-go-version
+	@grep "## `cat version.txt`" CHANGELOG.md || (echo "Missing '## `cat version.txt`' in CHANGELOG.md (required for automatic release notes)" && false)
 	@npm --version > /dev/null || (echo "The 'npm' command must be in your path to publish" && false)
 	@echo "Checking for uncommitted/untracked changes..." && test -z "`git status --porcelain | grep -vE 'M (CHANGELOG\.md|version\.txt)'`" || \
 		(echo "Refusing to publish with these uncommitted/untracked changes:" && \
@@ -441,22 +447,26 @@ publish-all: check-go-version
 
 	@echo Enter one-time password:
 	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
-		publish-freebsd-x64 \
 		publish-freebsd-arm64 \
+		publish-freebsd-x64 \
 		publish-openbsd-arm64 \
-		publish-openbsd-x64 \
+		publish-openbsd-x64
+
+	@echo Enter one-time password:
+	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
+		publish-darwin-arm64 \
+		publish-darwin-x64 \
+		publish-netbsd-arm64 \
 		publish-netbsd-x64
 
 	@echo Enter one-time password:
 	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
 		publish-android-x64 \
 		publish-android-arm \
-		publish-android-arm64 \
-		publish-darwin-x64
+		publish-android-arm64
 
 	@echo Enter one-time password:
 	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
-		publish-darwin-arm64 \
 		publish-linux-x64 \
 		publish-linux-ia32 \
 		publish-linux-arm
@@ -520,6 +530,9 @@ publish-freebsd-x64: platform-freebsd-x64
 
 publish-freebsd-arm64: platform-freebsd-arm64
 	test -n "$(OTP)" && cd npm/@esbuild/freebsd-arm64 && npm publish --otp="$(OTP)"
+
+publish-netbsd-arm64: platform-netbsd-arm64
+	test -n "$(OTP)" && cd npm/@esbuild/netbsd-arm64 && npm publish --otp="$(OTP)"
 
 publish-netbsd-x64: platform-netbsd-x64
 	test -n "$(OTP)" && cd npm/@esbuild/netbsd-x64 && npm publish --otp="$(OTP)"
@@ -618,6 +631,7 @@ validate-builds:
 	@$(MAKE) --no-print-directory TARGET=platform-linux-riscv64  SCOPE=@esbuild/ PACKAGE=linux-riscv64   SUBPATH=bin/esbuild  validate-build
 	@$(MAKE) --no-print-directory TARGET=platform-linux-s390x    SCOPE=@esbuild/ PACKAGE=linux-s390x     SUBPATH=bin/esbuild  validate-build
 	@$(MAKE) --no-print-directory TARGET=platform-linux-x64      SCOPE=@esbuild/ PACKAGE=linux-x64       SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-netbsd-arm64   SCOPE=@esbuild/ PACKAGE=netbsd-arm64    SUBPATH=bin/esbuild  validate-build
 	@$(MAKE) --no-print-directory TARGET=platform-netbsd-x64     SCOPE=@esbuild/ PACKAGE=netbsd-x64      SUBPATH=bin/esbuild  validate-build
 	@$(MAKE) --no-print-directory TARGET=platform-openbsd-arm64  SCOPE=@esbuild/ PACKAGE=openbsd-arm64   SUBPATH=bin/esbuild  validate-build
 	@$(MAKE) --no-print-directory TARGET=platform-openbsd-x64    SCOPE=@esbuild/ PACKAGE=openbsd-x64     SUBPATH=bin/esbuild  validate-build
@@ -654,6 +668,7 @@ clean:
 	rm -rf npm/@esbuild/linux-riscv64/bin
 	rm -rf npm/@esbuild/linux-s390x/bin
 	rm -rf npm/@esbuild/linux-x64/bin
+	rm -rf npm/@esbuild/netbsd-arm64/bin
 	rm -rf npm/@esbuild/netbsd-x64/bin
 	rm -rf npm/@esbuild/openbsd-arm64/bin
 	rm -rf npm/@esbuild/openbsd-x64/bin
